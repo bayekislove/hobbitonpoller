@@ -1,0 +1,40 @@
+name: Hobbiton Evening Tour Poller
+
+on:
+  schedule:
+    # Runs every 15 minutes. GitHub's cron is UTC-based and "best effort" —
+    # during busy periods a run can be delayed a few minutes, that's normal.
+    # Cron format: minute hour day month weekday
+    - cron: "*/15 * * * *"
+  # Lets you trigger a run manually from the Actions tab, useful for testing.
+  workflow_dispatch:
+
+jobs:
+  check-availability:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Run poller (single check)
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+        run: |
+          python hobbiton_poller.py \
+            --date "${{ vars.TARGET_DATE }}" \
+            --min-tickets "${{ vars.MIN_TICKETS }}" \
+            --email "${{ vars.EMAIL_TO }}" \
+            --once
