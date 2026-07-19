@@ -2,10 +2,10 @@ name: Hobbiton Evening Tour Poller
 
 on:
   schedule:
-    # Runs every 3 minutes. GitHub's cron is UTC-based and "best effort" —
+    # Runs every 5 minutes. GitHub's cron is UTC-based and "best effort" —
     # during busy periods a run can be delayed a few minutes, that's normal.
     # Cron format: minute hour day month weekday
-    - cron: "*/3 * * * *"
+    - cron: "*/5 * * * *"
   # Lets you trigger a run manually from the Actions tab, useful for testing.
   workflow_dispatch:
 

@@ -65,7 +65,7 @@ SCRIPT_VERSION = "v6-poll-wait-instead-of-fixed-sleeps"
 
 # Toggle this to False the first time you run it, so you can watch what
 # happens and fix selectors if the site's markup differs from my guesses.
-HEADLESS = False
+HEADLESS = True
 
 # Best-guess selectors — adjust after inspecting the live page (see notes above).
 SELECTORS = {
