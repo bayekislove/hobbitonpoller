@@ -26,15 +26,38 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Run poller (single check)
+      - name: Run poller (single check across date range)
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          START_DATE: ${{ vars.START_DATE }}
+          END_DATE: ${{ vars.END_DATE }}
+          MIN_TICKETS: ${{ vars.MIN_TICKETS }}
+          EMAIL_TO: ${{ vars.EMAIL_TO }}
         run: |
+          # Shell-level defaults protect against unset/empty repo variables
+          # (START_DATE, END_DATE, EMAIL_TO are required — the job fails
+          # loudly below if you forgot to set them, rather than crashing
+          # obscurely).
+          if [ -z "$START_DATE" ]; then
+            echo "::error::START_DATE variable is not set (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+          if [ -z "$END_DATE" ]; then
+            echo "::error::END_DATE variable is not set (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+          if [ -z "$EMAIL_TO" ]; then
+            echo "::error::EMAIL_TO variable is not set (Settings > Secrets and variables > Actions > Variables)."
+            exit 1
+          fi
+          MIN_TICKETS="${MIN_TICKETS:-2}"
+
           python hobbiton_poller.py \
-            --date "${{ vars.TARGET_DATE }}" \
-            --min-tickets "${{ vars.MIN_TICKETS }}" \
-            --email "${{ vars.EMAIL_TO }}" \
+            --start-date "$START_DATE" \
+            --end-date "$END_DATE" \
+            --min-tickets "$MIN_TICKETS" \
+            --email "$EMAIL_TO" \
             --once

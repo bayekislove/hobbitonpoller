@@ -39,8 +39,10 @@ USAGE
     pip install playwright
     playwright install chromium
     python hobbiton_poller.py --date 2026-08-15 --min-tickets 2
+    python hobbiton_poller.py --start-date 2026-12-03 --end-date 2026-12-07 --min-tickets 2
 
-Or import check_availability() into your own polling loop / cron job.
+Or import check_availability() / check_availability_multi() into your own
+polling loop / cron job.
 """
 
 import argparse
@@ -48,7 +50,7 @@ import os
 import smtplib
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
@@ -97,17 +99,18 @@ SELECTORS = {
 # Any other SMTP provider (Outlook, SendGrid, your own mail server, etc.)
 # works the same way — just point SMTP_HOST/PORT at it.
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER")
-SMTP_PASS = os.environ.get("SMTP_PASS")
+SMTP_HOST = os.environ.get("SMTP_HOST") or "smtp.gmail.com"
+SMTP_PORT = int(os.environ.get("SMTP_PORT") or "587")
+SMTP_USER = os.environ.get("SMTP_USER") or None
+SMTP_PASS = os.environ.get("SMTP_PASS") or None
 
 EMAIL_SUBJECT = "TICKETS FOR EVENING TOUR ARE AVAILABLE"
 
 
-def send_email(to_address: str, date_str: str, min_tickets: int):
-    """Send a plain-text notification email. Requires SMTP_USER / SMTP_PASS
-    env vars to be set (see EMAIL CONFIG notes above)."""
+def send_email(to_address: str, available_dates: list, min_tickets: int):
+    """Send a plain-text notification email listing which date(s) have
+    availability. Requires SMTP_USER / SMTP_PASS env vars (see EMAIL CONFIG
+    notes above)."""
     if not SMTP_USER or not SMTP_PASS:
         print(
             "[email] SMTP_USER / SMTP_PASS not set — skipping email send. "
@@ -116,9 +119,11 @@ def send_email(to_address: str, date_str: str, min_tickets: int):
         )
         return False
 
+    dates_list = "\n".join(f"  - {d}" for d in available_dates)
     body = (
         f"At least {min_tickets} tickets are available for the "
-        f"Hobbiton Evening Banquet Tour on {date_str}.\n\n"
+        f"Hobbiton Evening Banquet Tour on the following date(s):\n\n"
+        f"{dates_list}\n\n"
         f"Book here: {TOUR_URL}"
     )
     msg = MIMEText(body)
@@ -136,6 +141,16 @@ def send_email(to_address: str, date_str: str, min_tickets: int):
     except Exception as e:
         print(f"[email] Failed to send: {e}", file=sys.stderr)
         return False
+
+
+def date_range(start_str: str, end_str: str) -> list:
+    """Return a list of YYYY-MM-DD strings from start_str to end_str, inclusive."""
+    start = datetime.strptime(start_str, "%Y-%m-%d")
+    end = datetime.strptime(end_str, "%Y-%m-%d")
+    if end < start:
+        raise ValueError(f"--end-date ({end_str}) is before --start-date ({start_str})")
+    days = (end - start).days
+    return [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days + 1)]
 
 
 def _dismiss_maintenance_modal(page):
@@ -209,46 +224,69 @@ def check_availability(date_str: str, min_tickets: int = 2, headless: bool = HEA
         return has_slots and not sold_out
 
 
-def poll(date_str: str, min_tickets: int, interval_seconds: int = 300,
+def check_availability_multi(dates: list, min_tickets: int = 2, headless: bool = HEADLESS) -> list:
+    """Check each date in `dates` and return the subset that has at least
+    `min_tickets` free. Launches one browser per date (simpler and more
+    robust than trying to reuse widget state across dates), so this scales
+    linearly with the number of dates — fine for a handful of dates like a
+    5-day window, less fine for dozens."""
+    available = []
+    for d in dates:
+        try:
+            if check_availability(d, min_tickets, headless=headless):
+                available.append(d)
+        except Exception as e:
+            print(f"[{datetime.now()}] Error checking {d}: {e}", file=sys.stderr)
+    return available
+
+
+def poll(dates: list, min_tickets: int, interval_seconds: int = 300,
          max_checks: int = None, email_to: str = None):
-    """Poll repeatedly until availability is found (or max_checks reached).
-    If email_to is given, sends a notification email as soon as tickets
-    are found available."""
+    """Poll repeatedly (checking every date in `dates` each round) until at
+    least one date has availability (or max_checks reached). If email_to is
+    given, sends a single notification email listing every available date
+    found in that round."""
     checks = 0
     while max_checks is None or checks < max_checks:
         checks += 1
-        try:
-            available = check_availability(date_str, min_tickets)
-        except Exception as e:
-            print(f"[{datetime.now()}] Error during check: {e}", file=sys.stderr)
-            available = False
+        available = check_availability_multi(dates, min_tickets)
 
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if available:
-            print(f"[{stamp}] AVAILABLE: >= {min_tickets} tickets free on {date_str}!")
+            print(f"[{stamp}] AVAILABLE: >= {min_tickets} tickets free on: {', '.join(available)}")
             if email_to:
-                send_email(email_to, date_str, min_tickets)
+                send_email(email_to, available, min_tickets)
             return True
         else:
-            print(f"[{stamp}] Not yet available on {date_str}. Checking again in {interval_seconds}s.")
+            print(f"[{stamp}] No availability yet across {len(dates)} date(s). "
+                  f"Checking again in {interval_seconds}s.")
             time.sleep(interval_seconds)
     return False
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Poll Hobbiton Evening Banquet Tour availability.")
-    parser.add_argument("--date", required=True, help="Target date, YYYY-MM-DD")
+    parser.add_argument("--date", help="Single target date, YYYY-MM-DD")
+    parser.add_argument("--start-date", help="Start of a date range, YYYY-MM-DD (use with --end-date)")
+    parser.add_argument("--end-date", help="End of a date range, YYYY-MM-DD, inclusive (use with --start-date)")
     parser.add_argument("--min-tickets", type=int, default=2, help="Minimum free tickets required")
     parser.add_argument("--interval", type=int, default=300, help="Seconds between polls")
     parser.add_argument("--once", action="store_true", help="Check once and exit instead of polling")
     parser.add_argument("--email", help="Send a notification email to this address when tickets are available")
     args = parser.parse_args()
 
-    if args.once:
-        result = check_availability(args.date, args.min_tickets)
-        print(result)
-        if result and args.email:
-            send_email(args.email, args.date, args.min_tickets)
-        sys.exit(0 if result else 1)
+    if args.start_date and args.end_date:
+        target_dates = date_range(args.start_date, args.end_date)
+    elif args.date:
+        target_dates = [args.date]
     else:
-        poll(args.date, args.min_tickets, args.interval, email_to=args.email)
+        parser.error("Provide either --date, or both --start-date and --end-date.")
+
+    if args.once:
+        available = check_availability_multi(target_dates, args.min_tickets)
+        print(available if available else False)
+        if available and args.email:
+            send_email(args.email, available, args.min_tickets)
+        sys.exit(0 if available else 1)
+    else:
+        poll(target_dates, args.min_tickets, args.interval, email_to=args.email)
