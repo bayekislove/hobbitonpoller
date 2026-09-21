@@ -18,7 +18,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 # ----------------------------- CONFIG ---------------------------------
 
 TOUR_URL = "https://www.hobbitontours.com/experiences/evening-banquet-tour/"
-SCRIPT_VERSION = "v7-cookiebot-fix-and-ram-optimized"
+SCRIPT_VERSION = "v9-robust-date-picker-and-js-click"
 HEADLESS = True
 
 SELECTORS = {
@@ -140,8 +140,18 @@ def _first_visible(page, selector: str, description: str = "", timeout_ms: int =
 
 
 def _click_visible(page, selector: str, description: str = "", timeout: int = 15000):
-    # Dopisane force=True zabezpieczające przed nakładającymi się elementami
-    _first_visible(page, selector, description, timeout_ms=timeout).click(timeout=5000, force=True)
+    """Zapewnia przewinięcie do elementu i oczekiwanie na gotowość przed kliknięciem."""
+    elem = _first_visible(page, selector, description, timeout_ms=timeout)
+    try:
+        elem.scroll_into_view_if_needed(timeout=2000)
+    except Exception:
+        pass
+
+    try:
+        elem.click(timeout=5000, force=True)
+    except Exception:
+        # Fallback: jeśli kliknięcie Playwrighta zawiedzie przez przeszkodę w DOM, kliknij bezpośrednio w JS
+        page.evaluate("(el) => el.click()", elem.element_handle())
 
 
 def _dismiss_cookie_banner(page):
@@ -183,14 +193,21 @@ def _set_group_size(page, target_size: int):
 
 def _select_date(page, date_str: str):
     target = datetime.strptime(date_str, "%Y-%m-%d")
-    _click_visible(page, SELECTORS["date_field"], "date field label")
 
+    # 1. Otwórz kalendarz
+    _click_visible(page, SELECTORS["date_field"], "date field label")
+    page.wait_for_timeout(500)
+
+    # 2. Oblicz różnicę miesięcy od aktualnie wyświetlanego
     today = datetime.now()
     month_diff = (target.year - today.year) * 12 + (target.month - today.month)
     nav_selector = SELECTORS["calendar_next"] if month_diff >= 0 else SELECTORS["calendar_prev"]
+
     for _ in range(abs(month_diff)):
         _click_visible(page, nav_selector, "calendar month navigation arrow")
+        page.wait_for_timeout(300)  # Krótki bufor na animację przejścia miesiąca
 
+    # 3. Wybierz konkretny dzień
     day_selector = (
         f"button.pika-button[data-pika-day='{target.day}']"
         f"[data-pika-month='{target.month - 1}'][data-pika-year='{target.year}']"
