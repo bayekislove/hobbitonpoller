@@ -18,7 +18,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 # ----------------------------- CONFIG ---------------------------------
 
 TOUR_URL = "https://www.hobbitontours.com/experiences/evening-banquet-tour/"
-SCRIPT_VERSION = "v6-render-ready-with-http-server"
+SCRIPT_VERSION = "v7-cookiebot-fix-and-ram-optimized"
 HEADLESS = True
 
 SELECTORS = {
@@ -61,7 +61,6 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Hobbiton Poller is active and running!")
 
     def log_message(self, format, *args):
-        # Silence HTTP request logging in standard output
         return
 
 
@@ -84,7 +83,7 @@ def send_email(to_address: str, available_dates: list, min_tickets: int):
         )
         return False
 
-    dates_list = "\n".join(f"  - {d}" for d in available_dates)
+    dates_list = "\n".join(f"   - {d}" for d in available_dates)
     body = (
         f"At least {min_tickets} tickets are available for the "
         f"Hobbiton Evening Banquet Tour on the following date(s):\n\n"
@@ -141,22 +140,36 @@ def _first_visible(page, selector: str, description: str = "", timeout_ms: int =
 
 
 def _click_visible(page, selector: str, description: str = "", timeout: int = 15000):
-    _first_visible(page, selector, description, timeout_ms=timeout).click(timeout=5000)
+    # Dopisane force=True zabezpieczające przed nakładającymi się elementami
+    _first_visible(page, selector, description, timeout_ms=timeout).click(timeout=5000, force=True)
 
 
 def _dismiss_cookie_banner(page):
+    # KROK 1: Próba kliknięcia przycisku
     for sel in SELECTORS["cookie_consent_candidates"]:
         try:
-            page.click(sel, timeout=2000)
+            page.click(sel, timeout=1500, force=True)
             page.wait_for_timeout(300)
-            return
-        except PWTimeout:
+            break
+        except Exception:
             continue
+
+    # KROK 2: Bezpośrednie wyczyszczenie banera i nakładki w DOM przez JS
+    try:
+        page.evaluate("""() => {
+            const ids = ['CybotCookiebotDialog', 'CybotCookiebotDialogBodyUnderlay'];
+            ids.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.remove();
+            });
+        }""")
+    except Exception:
+        pass
 
 
 def _dismiss_maintenance_modal(page):
     try:
-        page.click(SELECTORS["maintenance_modal_dismiss"], timeout=3000)
+        page.click(SELECTORS["maintenance_modal_dismiss"], timeout=3000, force=True)
     except PWTimeout:
         pass
 
@@ -164,7 +177,7 @@ def _dismiss_maintenance_modal(page):
 def _set_group_size(page, target_size: int):
     plus_btn = _first_visible(page, SELECTORS["group_size_plus"], "group size '+' stepper")
     for _ in range(target_size - 1):
-        plus_btn.click()
+        plus_btn.click(force=True)
         page.wait_for_timeout(200)
 
 
@@ -187,9 +200,31 @@ def _select_date(page, date_str: str):
 
 def check_availability(date_str: str, min_tickets: int = 2, headless: bool = HEADLESS) -> bool:
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-accelerated-2d-canvas",
+                "--no-first-run",
+                "--no-zygote",
+                "--single-process",
+                "--disable-gpu"
+            ]
+        )
         try:
             page = browser.new_page()
+
+            # Optymalizacja RAM: blokada ciężkich zasobów
+            def block_heavy_resources(route):
+                if route.request.resource_type in ["image", "media", "font"]:
+                    route.abort()
+                else:
+                    route.continue_()
+
+            page.route("**/*", block_heavy_resources)
+
             page.goto(TOUR_URL, wait_until="domcontentloaded", timeout=60000)
             page.wait_for_selector(SELECTORS["date_field"], timeout=30000, state="attached")
 
@@ -236,7 +271,7 @@ def poll(dates: list, min_tickets: int, interval_seconds: int = 60,
                 send_email(email_to, available, min_tickets)
         else:
             print(f"[{stamp}] No availability across {len(dates)} date(s). Checking again in {interval_seconds}s.")
-            
+
         time.sleep(interval_seconds)
 
 
