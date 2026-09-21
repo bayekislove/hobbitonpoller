@@ -193,10 +193,15 @@ def _dismiss_cookie_banner(page):
 def _dismiss_maintenance_modal(page):
     log_debug("Checking for maintenance modal...")
     try:
-        page.click(SELECTORS["maintenance_modal_dismiss"], timeout=2000, force=True)
-        log_debug("Dismissed maintenance modal.")
-    except PWTimeout:
-        log_debug("No maintenance modal encountered.")
+        modal_btn = page.locator(SELECTORS["maintenance_modal_dismiss"]).first
+        if modal_btn.is_visible(timeout=1500):
+            log_debug("Maintenance modal is visible, clicking...")
+            modal_btn.click(force=True)
+            log_debug("Dismissed maintenance modal.")
+        else:
+            log_debug("Maintenance modal element found but not visible — skipping.")
+    except Exception as e:
+        log_debug(f"No active maintenance modal encountered or skipped ({e}).")
 
 
 def _set_group_size(page, target_size: int):
